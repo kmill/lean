@@ -261,8 +261,10 @@ private:
         name get_full_fname() const { return m_base_S_name + m_fname; }
     };
 
-    field_resolution field_to_decl(expr const & e, expr const & s, expr const & s_type);
-    field_resolution find_field_fn(expr const & e, expr const & s, expr const & s_type);
+    field_resolution field_to_decl(expr const & e, expr const & s, expr const & s_type,
+                                   bool & is_alternative_field);
+    field_resolution find_field_fn(expr const & e, expr const & s, expr const & s_type,
+                                   bool & is_alternative_field);
     expr visit_field(expr const & e, optional<expr> const & expected_type);
     expr instantiate_mvars(expr const & e, std::function<bool(expr const &)> pred); // NOLINT
     expr visit_structure_instance(expr const & e, optional<expr> expected_type);

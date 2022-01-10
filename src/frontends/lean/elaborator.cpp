@@ -78,6 +78,7 @@ Author: Leonardo de Moura
 namespace lean {
 static name * g_elab_strategy = nullptr;
 static name * g_elaborator_coercions = nullptr;
+static name * g_elab_field_alternatives = nullptr;
 
 bool get_elaborator_coercions(options const & opts) {
     return opts.get_bool(*g_elaborator_coercions, LEAN_DEFAULT_ELABORATOR_COERCIONS);
@@ -128,6 +129,10 @@ elaborator_strategy get_elaborator_strategy(environment const & env, name const 
     }
 
     return elaborator_strategy::WithExpectedType;
+}
+
+static names_attribute const & get_elab_field_alternatives_attribute() {
+    return static_cast<names_attribute const &>(get_system_attribute(*g_elab_field_alternatives));
 }
 
 #define trace_elab(CODE) lean_trace("elaborator", scope_trace_env _scope(m_env, m_ctx); CODE)
@@ -1876,7 +1881,8 @@ expr elaborator::visit_app_core(expr fn, buffer<expr> const & args, optional<exp
     } else if (is_field_notation(fn) && amask == arg_mask::Default) {
         expr s           = visit(macro_arg(fn, 0), none_expr());
         expr s_type      = head_beta_reduce(instantiate_mvars(infer_type(s)));
-        auto field_res   = find_field_fn(fn, s, s_type);
+        bool is_alternative_field = false;
+        auto field_res   = find_field_fn(fn, s, s_type, is_alternative_field);
         expr proj, proj_type;
         if (field_res.m_ldecl) {
             proj      = copy_tag(fn, field_res.m_ldecl->mk_ref());
@@ -1889,7 +1895,13 @@ expr elaborator::visit_app_core(expr fn, buffer<expr> const & args, optional<exp
         unsigned i       = 0;
         while (is_pi(proj_type)) {
             if (is_explicit(binding_info(proj_type))) {
-                if (is_app_of(binding_domain(proj_type), field_res.m_base_S_name)) {
+                if (is_alternative_field) {
+                    new_args.push_back(s);
+                    for (; i < args.size(); i++)
+                        new_args.push_back(args[i]);
+                    expr new_proj = visit_function(proj, has_args, has_args ? none_expr() : expected_type, ref);
+                    return visit_base_app(new_proj, amask, new_args, expected_type, ref);
+                } else if (is_app_of(binding_domain(proj_type), field_res.m_base_S_name)) {
                     /* found s location */
                     expr coerced_s = *mk_base_projections(m_env, field_res.m_S_name, field_res.m_base_S_name, mk_as_is(s));
                     new_args.push_back(copy_tag(fn, std::move(coerced_s)));
@@ -2685,7 +2697,8 @@ expr elaborator::visit_inaccessible(expr const & e, optional<expr> const & expec
     return copy_tag(e, mk_inaccessible(new_a));
 }
 
-elaborator::field_resolution elaborator::field_to_decl(expr const & e, expr const & s, expr const & s_type) {
+elaborator::field_resolution elaborator::field_to_decl(expr const & e, expr const & s, expr const & s_type,
+                                                       bool & is_alternative_field) {
     // prefer 'unknown identifier' error when lhs is a constant of non-value type
     if (is_field_notation(e)) {
         auto lhs = macro_arg(e, 0);
@@ -2747,21 +2760,37 @@ elaborator::field_resolution elaborator::field_to_decl(expr const & e, expr cons
             return field_resolution(full_fname, ldecl);
         }
         if (!m_env.find(full_fname)) {
-            auto pp_fn = mk_pp_ctx();
-            throw elaborator_exception(e, format("invalid field notation, '") + format(fname) + format("'") +
-                                       format(" is not a valid \"field\" because environment does not contain ") +
-                                       format("'") + format(full_fname) + format("'") +
-                                       pp_indent(pp_fn, s) +
-                                       line() + format("which has type") +
-                                       pp_indent(pp_fn, s_type));
+            // now look for alternative field notation locations
+            bool success = false;
+            auto const & data = *get_elab_field_alternatives_attribute().get(m_env, const_name(I));
+            for (name const & alt : data.m_names) {
+                name full_fname_alt = alt + fname;
+                if (m_env.find(full_fname_alt)) {
+                    full_fname = full_fname_alt;
+                    success = true;
+                    is_alternative_field = true;
+                    break;
+                }
+            }
+
+            if (!success) {
+                auto pp_fn = mk_pp_ctx();
+                throw elaborator_exception(e, format("invalid field notation, '") + format(fname) + format("'") +
+                                           format(" is not a valid \"field\" because environment does not contain ") +
+                                           format("'") + format(full_fname) + format("'") +
+                                           pp_indent(pp_fn, s) +
+                                           line() + format("which has type") +
+                                           pp_indent(pp_fn, s_type));
+            }
         }
         return full_fname;
     }
 }
 
-elaborator::field_resolution elaborator::find_field_fn(expr const & e, expr const & s, expr const & s_type) {
+elaborator::field_resolution elaborator::find_field_fn(expr const & e, expr const & s, expr const & s_type,
+                                                       bool & is_alternative_field) {
     try {
-        return field_to_decl(e, s, s_type);
+        return field_to_decl(e, s, s_type, is_alternative_field);
     } catch (elaborator_exception & ex1) {
         expr new_s_type = s_type;
         if (auto d = unfold_term(env(), new_s_type))
@@ -2770,7 +2799,7 @@ elaborator::field_resolution elaborator::find_field_fn(expr const & e, expr cons
         if (new_s_type == s_type)
             throw;
         try {
-            return find_field_fn(e, s, new_s_type);
+            return find_field_fn(e, s, new_s_type, is_alternative_field);
         } catch (elaborator_exception & ex2) {
             throw nested_elaborator_exception(ex2.get_pos(), ex1, ex2.pp());
         }
@@ -2781,7 +2810,8 @@ expr elaborator::visit_field(expr const & e, optional<expr> const & expected_typ
     lean_assert(is_field_notation(e));
     expr s         = visit(macro_arg(e, 0), none_expr());
     expr s_type    = head_beta_reduce(instantiate_mvars(infer_type(s)));
-    auto field_res = find_field_fn(e, s, s_type);
+    bool is_alternative_field = false;
+    auto field_res = find_field_fn(e, s, s_type, is_alternative_field);
     expr proj_app;
     if (field_res.m_ldecl) {
         proj_app   = copy_tag(e, mk_app(field_res.m_ldecl->mk_ref(), mk_as_is(s)));
@@ -4326,6 +4356,13 @@ void initialize_elaborator() {
     register_incompatible("elab_simple", "elab_as_eliminator");
     register_incompatible("elab_with_expected_type", "elab_as_eliminator");
 
+    g_elab_field_alternatives = new name("elab_field_alternatives");
+
+    register_system_attribute(
+        names_attribute(
+            *g_elab_field_alternatives,
+            "provides alternative prefixes to search when elaborating field notation"));
+
     DECLARE_VM_BUILTIN(name({"environment", "add_defn_eqns"}), environment_add_defn_eqns);
 
     DECLARE_VM_BUILTIN(name({"tactic", "save_type_info"}), tactic_save_type_info);
@@ -4338,6 +4375,7 @@ void initialize_elaborator() {
 
 void finalize_elaborator() {
     delete g_elab_strategy;
+    delete g_elab_field_alternatives;
     delete g_elaborator_coercions;
 }
 }
