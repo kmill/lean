@@ -2762,14 +2762,15 @@ elaborator::field_resolution elaborator::field_to_decl(expr const & e, expr cons
         if (!m_env.find(full_fname)) {
             // now look for alternative field notation locations
             bool success = false;
-            auto const & data = *get_elab_field_alternatives_attribute().get(m_env, const_name(I));
-            for (name const & alt : data.m_names) {
-                name full_fname_alt = alt + fname;
-                if (m_env.find(full_fname_alt)) {
-                    full_fname = full_fname_alt;
-                    success = true;
-                    is_alternative_field = true;
-                    break;
+            if (auto data = get_elab_field_alternatives_attribute().get(m_env, const_name(I))) {
+                for (name const & alt : data->m_names) {
+                    name full_fname_alt = alt + fname;
+                    if (m_env.find(full_fname_alt)) {
+                        full_fname = full_fname_alt;
+                        success = true;
+                        is_alternative_field = true;
+                        break;
+                    }
                 }
             }
 

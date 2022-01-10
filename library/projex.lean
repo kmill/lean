@@ -39,10 +39,9 @@ lemma adj_comm (u v : V) : G.adj u v ↔ G.adj v u := ⟨λ x, G.symm x, λ x, G
 
 lemma ne_of_adj {u v : V} (h : G.adj u v) : u ≠ v := by { intro, subst_vars, exact G.irrefl _ h }
 
-protected lemma adj.ne {G : simple_graph V} {a b : V} (h : G.adj a b) : a ≠ b := G.ne_of_adj h
+protected lemma adj'.ne {G : simple_graph V} {a b : V} (h : G.adj a b) : a ≠ b := G.ne_of_adj h
 
--- segmentation fault
---protected lemma adj.ne' {G : simple_graph V} {a b : V} (h : G.adj a b) : b ≠ a := h.ne.symm
+protected lemma adj'.ne' {G : simple_graph V} {a b : V} (h : G.adj' a b) : b ≠ a := h.ne.symm
 
 lemma ne_of_adj_of_not_adj {v w x : V} (h : G.adj v x) (hn : ¬ G.adj w x) : v ≠ w :=
 λ h', hn (h' ▸ h)
